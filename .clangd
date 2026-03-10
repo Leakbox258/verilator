@@ -1,0 +1,10 @@
+CompileFlags:
+  Add:
+    - "-I/home/leakbox/workspace/verilator/include"
+    - "-I/home/leakbox/workspace/verilator/src/obj_dbg"
+    - "-I/home/leakbox/workspace/verilator/src/obj_opt"
+Diagnostics:
+  Suppress:
+    - pp_file_not_found_angled_include_not_fatal
+Index:
+  Background: Build

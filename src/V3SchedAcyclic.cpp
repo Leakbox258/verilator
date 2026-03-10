@@ -43,6 +43,7 @@
 #include "V3SplitVar.h"
 #include "V3Stats.h"
 
+#include <cstddef>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
@@ -224,7 +225,7 @@ bool isCut(const SchedAcyclicVarVertex* vtxp) {
     return false;
 }
 
-std::vector<SchedAcyclicVarVertex*> findCutVertices(Graph* graphp) {
+std::pair<std::vector<SchedAcyclicVarVertex*>, std::size_t> findCutVertices(Graph* graphp) {
     // List of cut vertices being computed here
     std::vector<SchedAcyclicVarVertex*> result;
     const VNUser1InUse user1InUse;  // bool: already added to result
@@ -249,8 +250,7 @@ std::vector<SchedAcyclicVarVertex*> findCutVertices(Graph* graphp) {
     V3Stats::addStat("Scheduling, Cycles, cyclic logic blocks", nCyclicVtxs - nCyclicVars);
     V3Stats::addStat("Scheduling, Cycles, unique SCCs", sccs.size());
     V3Stats::addStat("Scheduling, Cycles, cut variables", result.size());
-
-    return result;
+    return {result, sccs.size()};
 }
 
 void resetEdgeWeights(const std::vector<SchedAcyclicVarVertex*>& cutVertices) {
@@ -354,7 +354,8 @@ std::string reportLoopVars(FileLine* warnFl, Graph* graphp, SchedAcyclicVarVerte
     return ss.str();
 }
 
-void reportCycles(Graph* graphp, const std::vector<SchedAcyclicVarVertex*>& cutVertices) {
+void reportCycles(Graph* graphp, const std::vector<SchedAcyclicVarVertex*>& cutVertices,
+                  const std::size_t sccCount) {
     for (SchedAcyclicVarVertex* vvtxp : cutVertices) {
         AstVarScope* const vscp = vvtxp->vscp();
         FileLine* const flp = vscp->fileline();
@@ -363,11 +364,11 @@ void reportCycles(Graph* graphp, const std::vector<SchedAcyclicVarVertex*>& cutV
         if (flp->warnIsOff(V3ErrorCode::UNOPTFLAT)) {
             // First v3warn not inside warnIsOff so we can see the suppressions with --debug
             vscp->v3warn(UNOPTFLAT, "Signal unoptimizable: Circular combinational logic: "
-                                        << vscp->prettyNameQ());
+                                        << vscp->prettyNameQ() << " and Find SCC: " << sccCount);
         } else {
             vscp->v3warn(UNOPTFLAT,
                          "Signal unoptimizable: Circular combinational logic: "
-                             << vscp->prettyNameQ() << '\n'
+                             << vscp->prettyNameQ() << " and Find SCC: " << sccCount << '\n'
                              << vscp->warnContextPrimary()
                              << V3Error::warnAdditionalInfo()
                              // Calls Graph::loopsVertexCb
@@ -507,13 +508,13 @@ LogicByScope breakCycles(AstNetlist* netlistp, const LogicByScope& combinational
     graphp->acyclic(&V3GraphEdge::followAlwaysTrue);
 
     // Find all cut vertices
-    const std::vector<SchedAcyclicVarVertex*> cutVertices = findCutVertices(graphp.get());
+    const auto [cutVertices, sccCount] = findCutVertices(graphp.get());
 
     // Reset edge weights for reporting
     resetEdgeWeights(cutVertices);
 
     // Report warnings/diagnostics
-    reportCycles(graphp.get(), cutVertices);
+    reportCycles(graphp.get(), cutVertices, sccCount);
 
     // Debug dump
     if (dumpLevel() >= 6) dumpSccs(graphp.get());
