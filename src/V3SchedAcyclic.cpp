@@ -35,7 +35,9 @@
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
 
+#include "V3Ast.h"
 #include "V3EmitV.h"
+#include "V3Error.h"
 #include "V3File.h"
 #include "V3Graph.h"
 #include "V3Sched.h"
@@ -44,6 +46,7 @@
 #include "V3Stats.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
@@ -225,7 +228,7 @@ bool isCut(const SchedAcyclicVarVertex* vtxp) {
     return false;
 }
 
-std::pair<std::vector<SchedAcyclicVarVertex*>, std::size_t> findCutVertices(Graph* graphp) {
+std::vector<SchedAcyclicVarVertex*> findCutVertices(Graph* graphp) {
     // List of cut vertices being computed here
     std::vector<SchedAcyclicVarVertex*> result;
     const VNUser1InUse user1InUse;  // bool: already added to result
@@ -250,7 +253,8 @@ std::pair<std::vector<SchedAcyclicVarVertex*>, std::size_t> findCutVertices(Grap
     V3Stats::addStat("Scheduling, Cycles, cyclic logic blocks", nCyclicVtxs - nCyclicVars);
     V3Stats::addStat("Scheduling, Cycles, unique SCCs", sccs.size());
     V3Stats::addStat("Scheduling, Cycles, cut variables", result.size());
-    return {result, sccs.size()};
+
+    return result;
 }
 
 void resetEdgeWeights(const std::vector<SchedAcyclicVarVertex*>& cutVertices) {
@@ -354,21 +358,29 @@ std::string reportLoopVars(FileLine* warnFl, Graph* graphp, SchedAcyclicVarVerte
     return ss.str();
 }
 
-void reportCycles(Graph* graphp, const std::vector<SchedAcyclicVarVertex*>& cutVertices,
-                  const std::size_t sccCount) {
+void reportCycles(Graph* graphp, const std::vector<SchedAcyclicVarVertex*>& cutVertices) {
+
+    std::unordered_set<uint32_t> scc;
+
     for (SchedAcyclicVarVertex* vvtxp : cutVertices) {
         AstVarScope* const vscp = vvtxp->vscp();
         FileLine* const flp = vscp->fileline();
+
+        // Adding sccs that can't be cut automatically
+        uint32_t color = vvtxp->color();
+        if (color) {  // Just in case...
+            scc.insert(color);
+        }
 
         // First v3warn not inside warnIsOff so we can see the suppressions with --debug
         if (flp->warnIsOff(V3ErrorCode::UNOPTFLAT)) {
             // First v3warn not inside warnIsOff so we can see the suppressions with --debug
             vscp->v3warn(UNOPTFLAT, "Signal unoptimizable: Circular combinational logic: "
-                                        << vscp->prettyNameQ() << " and Find SCC: " << sccCount);
+                                        << vscp->prettyNameQ());
         } else {
             vscp->v3warn(UNOPTFLAT,
                          "Signal unoptimizable: Circular combinational logic: "
-                             << vscp->prettyNameQ() << " and Find SCC: " << sccCount << '\n'
+                             << vscp->prettyNameQ() << '\n'
                              << vscp->warnContextPrimary()
                              << V3Error::warnAdditionalInfo()
                              // Calls Graph::loopsVertexCb
@@ -378,6 +390,7 @@ void reportCycles(Graph* graphp, const std::vector<SchedAcyclicVarVertex*>& cutV
                                      ? reportLoopVars(vscp->fileline(), graphp, vvtxp)
                                      : ""));
             // Complain just once
+            // flp->modifyWarnOff will trun off warnings on certain line of the source file
             flp->modifyWarnOff(V3ErrorCode::UNOPTFLAT, true);
             // Create a subgraph for the UNOPTFLAT loop
             if (v3Global.opt.reportUnoptflat()) {
@@ -387,6 +400,10 @@ void reportCycles(Graph* graphp, const std::vector<SchedAcyclicVarVertex*>& cutV
             }
         }
     }
+    // Print SCC amount in this cycle
+    v3warn(UNOPTFLAT, "UnOptimized: Find " << scc.size() << " SCCs in design, "
+                                           << cutVertices.size()
+                                           << " vertices maybe needed to optimize");
 }
 
 void dumpSccs(V3Graph* graphp) {
@@ -508,13 +525,13 @@ LogicByScope breakCycles(AstNetlist* netlistp, const LogicByScope& combinational
     graphp->acyclic(&V3GraphEdge::followAlwaysTrue);
 
     // Find all cut vertices
-    const auto [cutVertices, sccCount] = findCutVertices(graphp.get());
+    const auto cutVertices = findCutVertices(graphp.get());
 
     // Reset edge weights for reporting
     resetEdgeWeights(cutVertices);
 
     // Report warnings/diagnostics
-    reportCycles(graphp.get(), cutVertices, sccCount);
+    reportCycles(graphp.get(), cutVertices);
 
     // Debug dump
     if (dumpLevel() >= 6) dumpSccs(graphp.get());
